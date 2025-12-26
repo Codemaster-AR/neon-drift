@@ -36,7 +36,7 @@
             backdrop-filter: blur(10px);
             border: 1px solid rgba(255, 255, 255, 0.1);
             border-radius: 16px;
-            padding: 15px 25px;
+            padding: 12px 20px;
             pointer-events: auto;
         }
         #menu-overlay {
@@ -57,6 +57,20 @@
             box-shadow: 0 0 25px rgba(0, 255, 255, 0.6);
             transform: scale(1.05);
         }
+        .hp-bar-bg {
+            width: 120px;
+            height: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 4px;
+        }
+        #hp-fill {
+            height: 100%;
+            background: #22c55e;
+            width: 100%;
+            transition: width 0.3s ease, background 0.3s ease;
+        }
     </style>
 </head>
 <body>
@@ -64,12 +78,21 @@
     <div id="ui-layer">
         <div class="flex justify-between items-start">
             <div class="glass-panel">
-                <div class="text-xs uppercase tracking-widest text-cyan-400">Score</div>
-                <div id="score-display" class="text-3xl font-bold">0</div>
+                <div class="text-xs uppercase tracking-widest text-cyan-400">Integrity</div>
+                <div class="hp-bar-bg">
+                    <div id="hp-fill"></div>
+                </div>
+                <div id="ammo-display" class="text-xs mt-2 text-orange-400 font-bold uppercase tracking-tighter">Ammo: 0</div>
             </div>
-            <div class="glass-panel">
-                <div class="text-xs uppercase tracking-widest text-pink-500">High Score</div>
-                <div id="high-score-display" class="text-3xl font-bold">0</div>
+            <div class="flex gap-4">
+                <div class="glass-panel text-right">
+                    <div class="text-xs uppercase tracking-widest text-cyan-400">Score</div>
+                    <div id="score-display" class="text-2xl font-bold">0</div>
+                </div>
+                <div class="glass-panel text-right hidden sm:block">
+                    <div class="text-xs uppercase tracking-widest text-pink-500">Best</div>
+                    <div id="high-score-display" class="text-2xl font-bold">0</div>
+                </div>
             </div>
         </div>
     </div>
@@ -77,20 +100,21 @@
     <div id="menu-overlay">
         <div class="text-center p-8 bg-zinc-900 border border-zinc-700 rounded-3xl shadow-2xl max-w-sm w-full">
             <h1 class="text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-600 mb-2">NEON DRIFT</h1>
-            <p class="text-zinc-400 mb-8">Dodge the sparks. Collect the light.</p>
+            <p class="text-zinc-400 mb-8">Dodge sparks. Scavenge light. Fight back.</p>
             
             <div id="game-over-msg" class="hidden mb-6">
                 <p class="text-pink-500 font-bold text-xl uppercase tracking-tighter">System Offline</p>
-                <p class="text-zinc-500">You lasted <span id="final-score" class="text-white">0</span> seconds</p>
+                <p class="text-zinc-500">Final Score: <span id="final-score" class="text-white">0</span></p>
             </div>
 
             <button id="start-btn" class="btn-glow w-full py-4 bg-cyan-500 text-black font-bold rounded-xl text-xl uppercase tracking-widest mb-4">
-                Start Engine
+                Initialize
             </button>
             
-            <div class="text-zinc-500 text-sm mt-4">
-                <p class="hidden md:block">Use Arrow Keys or A/D to move</p>
-                <p class="md:hidden">Drag or Tap to move</p>
+            <div class="text-zinc-500 text-xs mt-4 leading-relaxed">
+                <p>Move: Arrows / A-D / Touch Drag</p>
+                <p>Shoot: SPACE / Tap Screen</p>
+                <p class="mt-2"><span class="text-green-400">Green (+)</span>: Health | <span class="text-orange-400">Orange</span>: Ammo</p>
             </div>
         </div>
     </div>
@@ -106,6 +130,8 @@
         const menuOverlay = document.getElementById('menu-overlay');
         const startBtn = document.getElementById('start-btn');
         const gameOverMsg = document.getElementById('game-over-msg');
+        const hpFill = document.getElementById('hp-fill');
+        const ammoDisplay = document.getElementById('ammo-display');
 
         // Game State
         let gameState = 'MENU';
@@ -119,19 +145,24 @@
             size: 20,
             color: '#00ffff',
             targetX: 0,
-            trail: []
+            trail: [],
+            hp: 100,
+            maxHp: 100,
+            ammo: 0,
+            lastShot: 0
         };
 
         let obstacles = [];
         let particles = [];
-        let collectibles = [];
+        let pickups = []; // Combined collectibles (Energy, Health, Ammo)
+        let projectiles = [];
         let frameCount = 0;
         let speedMultiplier = 1;
 
         // Configuration
         const PLAYER_SPEED = 0.15;
         const OBSTACLE_BASE_SPEED = 4;
-        const SPAWN_RATE = 60; // frames
+        const SPAWN_RATE = 60; 
 
         function resize() {
             canvas.width = window.innerWidth;
@@ -146,10 +177,12 @@
 
         // Controls
         const keys = {};
-        window.addEventListener('keydown', (e) => keys[e.code] = true);
+        window.addEventListener('keydown', (e) => {
+            keys[e.code] = true;
+            if (e.code === 'Space') shoot();
+        });
         window.addEventListener('keyup', (e) => keys[e.code] = false);
 
-        // Touch/Mouse Controls
         function handlePointer(e) {
             if (gameState !== 'PLAYING') return;
             const clientX = e.touches ? e.touches[0].clientX : e.clientX;
@@ -162,6 +195,14 @@
             handlePointer(e);
         }, { passive: false });
 
+        canvas.addEventListener('mousedown', () => { if(gameState === 'PLAYING') shoot(); });
+        canvas.addEventListener('touchstart', (e) => { 
+            if(gameState === 'PLAYING') {
+                handlePointer(e);
+                shoot(); 
+            }
+        });
+
         startBtn.addEventListener('click', startGame);
 
         function startGame() {
@@ -170,10 +211,41 @@
             score = 0;
             speedMultiplier = 1;
             obstacles = [];
-            collectibles = [];
+            pickups = [];
+            projectiles = [];
+            particles = [];
             player.trail = [];
+            player.hp = 100;
+            player.ammo = 5;
             frameCount = 0;
-            scoreDisplay.innerText = '0';
+            updateUI();
+        }
+
+        function updateUI() {
+            scoreDisplay.innerText = Math.floor(score);
+            ammoDisplay.innerText = `Ammo: ${player.ammo}`;
+            const hpPercent = (player.hp / player.maxHp) * 100;
+            hpFill.style.width = `${Math.max(0, hpPercent)}%`;
+            
+            if (hpPercent > 50) hpFill.style.background = '#22c55e';
+            else if (hpPercent > 25) hpFill.style.background = '#eab308';
+            else hpFill.style.background = '#ef4444';
+        }
+
+        function shoot() {
+            if (player.ammo > 0 && Date.now() - player.lastShot > 150) {
+                player.ammo--;
+                player.lastShot = Date.now();
+                projectiles.push({
+                    x: player.x,
+                    y: player.y - 20,
+                    vx: 0,
+                    vy: -12,
+                    size: 4,
+                    color: '#00ffff'
+                });
+                updateUI();
+            }
         }
 
         function gameOver() {
@@ -181,7 +253,7 @@
             menuOverlay.style.display = 'flex';
             gameOverMsg.classList.remove('hidden');
             finalScoreDisplay.innerText = Math.floor(score);
-            startBtn.innerText = 'Restart';
+            startBtn.innerText = 'Repair & Restart';
             
             if (score > highScore) {
                 highScore = Math.floor(score);
@@ -203,24 +275,38 @@
             });
         }
 
-        function spawnCollectible() {
-            collectibles.push({
+        function spawnPickup() {
+            const rand = Math.random();
+            let type = 'ENERGY';
+            let color = '#f0ff00';
+            
+            if (rand > 0.85) {
+                type = 'HEALTH';
+                color = '#22c55e';
+            } else if (rand > 0.7) {
+                type = 'AMMO';
+                color = '#f97316';
+            }
+
+            pickups.push({
                 x: Math.random() * canvas.width,
                 y: -20,
-                size: 10,
+                size: 12,
                 speed: 3 * speedMultiplier,
-                color: '#f0ff00'
+                type: type,
+                color: color
             });
         }
 
-        function createExplosion(x, y, color) {
-            for (let i = 0; i < 15; i++) {
+        function createExplosion(x, y, color, count = 15) {
+            for (let i = 0; i < count; i++) {
                 particles.push({
                     x, y,
                     vx: (Math.random() - 0.5) * 10,
                     vy: (Math.random() - 0.5) * 10,
                     life: 1.0,
-                    color: color
+                    color: color,
+                    size: 2 + Math.random() * 3
                 });
             }
         }
@@ -230,30 +316,28 @@
 
             frameCount++;
             score += 0.1 * speedMultiplier;
-            scoreDisplay.innerText = Math.floor(score);
-            speedMultiplier += 0.0002;
+            speedMultiplier += 0.00015;
 
-            // Player Movement (Keyboard)
+            // Player Movement
             if (keys['ArrowLeft'] || keys['KeyA']) player.targetX -= 15;
             if (keys['ArrowRight'] || keys['KeyD']) player.targetX += 15;
-            
-            // Boundary check
             if (player.targetX < player.size) player.targetX = player.size;
             if (player.targetX > canvas.width - player.size) player.targetX = canvas.width - player.size;
-
-            // Interpolate movement for smoothness
             player.x += (player.targetX - player.x) * PLAYER_SPEED;
 
             // Trail
             player.trail.unshift({x: player.x, y: player.y});
             if (player.trail.length > 10) player.trail.pop();
 
-            // Spawn logic
-            if (frameCount % Math.max(10, Math.floor(SPAWN_RATE / speedMultiplier)) === 0) {
-                spawnObstacle();
-            }
-            if (frameCount % 120 === 0) {
-                spawnCollectible();
+            // Spawning
+            if (frameCount % Math.max(12, Math.floor(SPAWN_RATE / speedMultiplier)) === 0) spawnObstacle();
+            if (frameCount % 100 === 0) spawnPickup();
+
+            // Projectiles
+            for (let i = projectiles.length - 1; i >= 0; i--) {
+                let p = projectiles[i];
+                p.y += p.vy;
+                if (p.y < -50) projectiles.splice(i, 1);
             }
 
             // Update Obstacles
@@ -262,33 +346,65 @@
                 o.y += o.speed;
                 o.rot += o.rotSpd;
 
-                // Collision
+                // Projectile Collision
+                for (let j = projectiles.length - 1; j >= 0; j--) {
+                    let proj = projectiles[j];
+                    const pdx = proj.x - o.x;
+                    const pdy = proj.y - o.y;
+                    const pDist = Math.sqrt(pdx*pdx + pdy*pdy);
+                    if (pDist < o.size) {
+                        createExplosion(o.x, o.y, o.color, 25);
+                        score += 100;
+                        obstacles.splice(i, 1);
+                        projectiles.splice(j, 1);
+                        break;
+                    }
+                }
+                if (!obstacles[i]) continue;
+
+                // Player Collision
                 const dx = player.x - o.x;
                 const dy = player.y - o.y;
                 const distance = Math.sqrt(dx*dx + dy*dy);
-                if (distance < (player.size + o.size/2)) {
-                    createExplosion(player.x, player.y, player.color);
-                    gameOver();
+                const combinedRadius = player.size + o.size/2;
+
+                if (distance < combinedRadius) {
+                    // Direct Hit vs Graze
+                    const hitDepth = combinedRadius - distance;
+                    if (hitDepth > 15) { // Direct
+                        player.hp -= 25;
+                        createExplosion(player.x, player.y, o.color, 10);
+                        obstacles.splice(i, 1);
+                    } else { // Graze/Brush
+                        player.hp -= 0.5; // Damage over time while brushing
+                        createExplosion(player.x, player.y, '#ffffff', 1);
+                    }
+                    updateUI();
+                    if (player.hp <= 0) gameOver();
                 }
 
-                if (o.y > canvas.height + o.size) obstacles.splice(i, 1);
+                if (o && o.y > canvas.height + o.size) obstacles.splice(i, 1);
             }
 
-            // Update Collectibles
-            for (let i = collectibles.length - 1; i >= 0; i--) {
-                let c = collectibles[i];
-                c.y += c.speed;
+            // Update Pickups
+            for (let i = pickups.length - 1; i >= 0; i--) {
+                let p = pickups[i];
+                p.y += p.speed;
 
-                const dx = player.x - c.x;
-                const dy = player.y - c.y;
+                const dx = player.x - p.x;
+                const dy = player.y - p.y;
                 const distance = Math.sqrt(dx*dx + dy*dy);
-                if (distance < (player.size + c.size)) {
-                    score += 50;
-                    createExplosion(c.x, c.y, c.color);
-                    collectibles.splice(i, 1);
+                if (distance < (player.size + p.size)) {
+                    if (p.type === 'ENERGY') score += 50;
+                    if (p.type === 'HEALTH') player.hp = Math.min(player.maxHp, player.hp + 20);
+                    if (p.type === 'AMMO') player.ammo += 10;
+                    
+                    createExplosion(p.x, p.y, p.color, 15);
+                    pickups.splice(i, 1);
+                    updateUI();
+                } else if (p.y > canvas.height + 20) {
+                    pickups.splice(i, 1);
                 }
-
-                if (c.y > canvas.height + 20) collectibles.splice(i, 1);
             }
 
             // Update Particles
@@ -299,32 +415,27 @@
                 p.life -= 0.02;
                 if (p.life <= 0) particles.splice(i, 1);
             }
+            
+            updateUI();
         }
 
         function draw() {
-            // Background Clear
-            ctx.fillStyle = 'rgba(10, 10, 12, 0.3)'; // Motion blur effect
+            ctx.fillStyle = 'rgba(10, 10, 12, 0.3)'; 
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-            // Grid lines (Background)
+            // Background Grid
             ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
             ctx.lineWidth = 1;
             const gridSize = 50;
             const scrollOffset = (frameCount * 2) % gridSize;
             for (let x = 0; x <= canvas.width; x += gridSize) {
-                ctx.beginPath();
-                ctx.moveTo(x, 0);
-                ctx.lineTo(x, canvas.height);
-                ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
             }
             for (let y = scrollOffset; y <= canvas.height; y += gridSize) {
-                ctx.beginPath();
-                ctx.moveTo(0, y);
-                ctx.lineTo(canvas.width, y);
-                ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
             }
 
-            // Draw Trail
+            // Trail
             player.trail.forEach((t, index) => {
                 const opacity = 1 - (index / player.trail.length);
                 ctx.fillStyle = `rgba(0, 255, 255, ${opacity * 0.3})`;
@@ -333,8 +444,8 @@
                 ctx.fill();
             });
 
-            // Draw Player
-            ctx.shadowBlur = 15;
+            // Player
+            ctx.shadowBlur = (player.hp < 30 && frameCount % 20 < 10) ? 30 : 15;
             ctx.shadowColor = player.color;
             ctx.fillStyle = player.color;
             ctx.beginPath();
@@ -345,7 +456,17 @@
             ctx.fill();
             ctx.shadowBlur = 0;
 
-            // Draw Obstacles
+            // Projectiles
+            projectiles.forEach(p => {
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = p.color;
+                ctx.fillStyle = p.color;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            // Obstacles
             obstacles.forEach(o => {
                 ctx.save();
                 ctx.translate(o.x, o.y);
@@ -358,21 +479,34 @@
                 ctx.restore();
             });
 
-            // Draw Collectibles
-            collectibles.forEach(c => {
+            // Pickups
+            pickups.forEach(p => {
                 ctx.shadowBlur = 15;
-                ctx.shadowColor = c.color;
-                ctx.fillStyle = c.color;
-                ctx.beginPath();
-                ctx.arc(c.x, c.y, c.size, 0, Math.PI * 2);
-                ctx.fill();
+                ctx.shadowColor = p.color;
+                ctx.fillStyle = p.color;
+                if (p.type === 'HEALTH') {
+                    // Cross shape for health
+                    ctx.fillRect(p.x - 2, p.y - 8, 4, 16);
+                    ctx.fillRect(p.x - 8, p.y - 2, 16, 4);
+                } else if (p.type === 'AMMO') {
+                    ctx.beginPath();
+                    ctx.moveTo(p.x - 6, p.y + 6);
+                    ctx.lineTo(p.x, p.y - 10);
+                    ctx.lineTo(p.x + 6, p.y + 6);
+                    ctx.closePath();
+                    ctx.fill();
+                } else {
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                    ctx.fill();
+                }
             });
 
-            // Draw Particles
+            // Particles
             particles.forEach(p => {
                 ctx.fillStyle = p.color;
                 ctx.globalAlpha = p.life;
-                ctx.fillRect(p.x, p.y, 3, 3);
+                ctx.fillRect(p.x, p.y, p.size, p.size);
             });
             ctx.globalAlpha = 1;
             ctx.shadowBlur = 0;
