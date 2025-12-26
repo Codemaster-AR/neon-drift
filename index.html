@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Neon Drift</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #0a0a0c;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            touch-action: none;
+        }
+        canvas {
+            display: block;
+        }
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 20px;
+            color: white;
+            z-index: 10;
+        }
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            padding: 15px 25px;
+            pointer-events: auto;
+        }
+        #menu-overlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.85);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+            pointer-events: auto;
+        }
+        .btn-glow {
+            transition: all 0.3s ease;
+            box-shadow: 0 0 15px rgba(0, 255, 255, 0.3);
+        }
+        .btn-glow:hover {
+            box-shadow: 0 0 25px rgba(0, 255, 255, 0.6);
+            transform: scale(1.05);
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <div class="flex justify-between items-start">
+            <div class="glass-panel">
+                <div class="text-xs uppercase tracking-widest text-cyan-400">Score</div>
+                <div id="score-display" class="text-3xl font-bold">0</div>
+            </div>
+            <div class="glass-panel">
+                <div class="text-xs uppercase tracking-widest text-pink-500">High Score</div>
+                <div id="high-score-display" class="text-3xl font-bold">0</div>
+            </div>
+        </div>
+    </div>
+
+    <div id="menu-overlay">
+        <div class="text-center p-8 bg-zinc-900 border border-zinc-700 rounded-3xl shadow-2xl max-w-sm w-full">
+            <h1 class="text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-600 mb-2">NEON DRIFT</h1>
+            <p class="text-zinc-400 mb-8">Dodge the sparks. Collect the light.</p>
+            
+            <div id="game-over-msg" class="hidden mb-6">
+                <p class="text-pink-500 font-bold text-xl uppercase tracking-tighter">System Offline</p>
+                <p class="text-zinc-500">You lasted <span id="final-score" class="text-white">0</span> seconds</p>
+            </div>
+
+            <button id="start-btn" class="btn-glow w-full py-4 bg-cyan-500 text-black font-bold rounded-xl text-xl uppercase tracking-widest mb-4">
+                Start Engine
+            </button>
+            
+            <div class="text-zinc-500 text-sm mt-4">
+                <p class="hidden md:block">Use Arrow Keys or A/D to move</p>
+                <p class="md:hidden">Drag or Tap to move</p>
+            </div>
+        </div>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreDisplay = document.getElementById('score-display');
+        const highScoreDisplay = document.getElementById('high-score-display');
+        const finalScoreDisplay = document.getElementById('final-score');
+        const menuOverlay = document.getElementById('menu-overlay');
+        const startBtn = document.getElementById('start-btn');
+        const gameOverMsg = document.getElementById('game-over-msg');
+
+        // Game State
+        let gameState = 'MENU';
+        let score = 0;
+        let highScore = localStorage.getItem('neon_drift_highscore') || 0;
+        highScoreDisplay.innerText = highScore;
+
+        let player = {
+            x: 0,
+            y: 0,
+            size: 20,
+            color: '#00ffff',
+            targetX: 0,
+            trail: []
+        };
+
+        let obstacles = [];
+        let particles = [];
+        let collectibles = [];
+        let frameCount = 0;
+        let speedMultiplier = 1;
+
+        // Configuration
+        const PLAYER_SPEED = 0.15;
+        const OBSTACLE_BASE_SPEED = 4;
+        const SPAWN_RATE = 60; // frames
+
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            player.x = canvas.width / 2;
+            player.targetX = player.x;
+            player.y = canvas.height * 0.85;
+        }
+
+        window.addEventListener('resize', resize);
+        resize();
+
+        // Controls
+        const keys = {};
+        window.addEventListener('keydown', (e) => keys[e.code] = true);
+        window.addEventListener('keyup', (e) => keys[e.code] = false);
+
+        // Touch/Mouse Controls
+        function handlePointer(e) {
+            if (gameState !== 'PLAYING') return;
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            player.targetX = clientX;
+        }
+
+        canvas.addEventListener('mousemove', handlePointer);
+        canvas.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            handlePointer(e);
+        }, { passive: false });
+
+        startBtn.addEventListener('click', startGame);
+
+        function startGame() {
+            gameState = 'PLAYING';
+            menuOverlay.style.display = 'none';
+            score = 0;
+            speedMultiplier = 1;
+            obstacles = [];
+            collectibles = [];
+            player.trail = [];
+            frameCount = 0;
+            scoreDisplay.innerText = '0';
+        }
+
+        function gameOver() {
+            gameState = 'OVER';
+            menuOverlay.style.display = 'flex';
+            gameOverMsg.classList.remove('hidden');
+            finalScoreDisplay.innerText = Math.floor(score);
+            startBtn.innerText = 'Restart';
+            
+            if (score > highScore) {
+                highScore = Math.floor(score);
+                localStorage.setItem('neon_drift_highscore', highScore);
+                highScoreDisplay.innerText = highScore;
+            }
+        }
+
+        function spawnObstacle() {
+            const size = 20 + Math.random() * 40;
+            obstacles.push({
+                x: Math.random() * canvas.width,
+                y: -size,
+                size: size,
+                speed: (OBSTACLE_BASE_SPEED + Math.random() * 3) * speedMultiplier,
+                color: '#ff0055',
+                rot: Math.random() * Math.PI * 2,
+                rotSpd: (Math.random() - 0.5) * 0.1
+            });
+        }
+
+        function spawnCollectible() {
+            collectibles.push({
+                x: Math.random() * canvas.width,
+                y: -20,
+                size: 10,
+                speed: 3 * speedMultiplier,
+                color: '#f0ff00'
+            });
+        }
+
+        function createExplosion(x, y, color) {
+            for (let i = 0; i < 15; i++) {
+                particles.push({
+                    x, y,
+                    vx: (Math.random() - 0.5) * 10,
+                    vy: (Math.random() - 0.5) * 10,
+                    life: 1.0,
+                    color: color
+                });
+            }
+        }
+
+        function update() {
+            if (gameState !== 'PLAYING') return;
+
+            frameCount++;
+            score += 0.1 * speedMultiplier;
+            scoreDisplay.innerText = Math.floor(score);
+            speedMultiplier += 0.0002;
+
+            // Player Movement (Keyboard)
+            if (keys['ArrowLeft'] || keys['KeyA']) player.targetX -= 15;
+            if (keys['ArrowRight'] || keys['KeyD']) player.targetX += 15;
+            
+            // Boundary check
+            if (player.targetX < player.size) player.targetX = player.size;
+            if (player.targetX > canvas.width - player.size) player.targetX = canvas.width - player.size;
+
+            // Interpolate movement for smoothness
+            player.x += (player.targetX - player.x) * PLAYER_SPEED;
+
+            // Trail
+            player.trail.unshift({x: player.x, y: player.y});
+            if (player.trail.length > 10) player.trail.pop();
+
+            // Spawn logic
+            if (frameCount % Math.max(10, Math.floor(SPAWN_RATE / speedMultiplier)) === 0) {
+                spawnObstacle();
+            }
+            if (frameCount % 120 === 0) {
+                spawnCollectible();
+            }
+
+            // Update Obstacles
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                let o = obstacles[i];
+                o.y += o.speed;
+                o.rot += o.rotSpd;
+
+                // Collision
+                const dx = player.x - o.x;
+                const dy = player.y - o.y;
+                const distance = Math.sqrt(dx*dx + dy*dy);
+                if (distance < (player.size + o.size/2)) {
+                    createExplosion(player.x, player.y, player.color);
+                    gameOver();
+                }
+
+                if (o.y > canvas.height + o.size) obstacles.splice(i, 1);
+            }
+
+            // Update Collectibles
+            for (let i = collectibles.length - 1; i >= 0; i--) {
+                let c = collectibles[i];
+                c.y += c.speed;
+
+                const dx = player.x - c.x;
+                const dy = player.y - c.y;
+                const distance = Math.sqrt(dx*dx + dy*dy);
+                if (distance < (player.size + c.size)) {
+                    score += 50;
+                    createExplosion(c.x, c.y, c.color);
+                    collectibles.splice(i, 1);
+                }
+
+                if (c.y > canvas.height + 20) collectibles.splice(i, 1);
+            }
+
+            // Update Particles
+            for (let i = particles.length - 1; i >= 0; i--) {
+                let p = particles[i];
+                p.x += p.vx;
+                p.y += p.vy;
+                p.life -= 0.02;
+                if (p.life <= 0) particles.splice(i, 1);
+            }
+        }
+
+        function draw() {
+            // Background Clear
+            ctx.fillStyle = 'rgba(10, 10, 12, 0.3)'; // Motion blur effect
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Grid lines (Background)
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
+            ctx.lineWidth = 1;
+            const gridSize = 50;
+            const scrollOffset = (frameCount * 2) % gridSize;
+            for (let x = 0; x <= canvas.width; x += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, canvas.height);
+                ctx.stroke();
+            }
+            for (let y = scrollOffset; y <= canvas.height; y += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(canvas.width, y);
+                ctx.stroke();
+            }
+
+            // Draw Trail
+            player.trail.forEach((t, index) => {
+                const opacity = 1 - (index / player.trail.length);
+                ctx.fillStyle = `rgba(0, 255, 255, ${opacity * 0.3})`;
+                ctx.beginPath();
+                ctx.arc(t.x, t.y, player.size * (1 - index/15), 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            // Draw Player
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = player.color;
+            ctx.fillStyle = player.color;
+            ctx.beginPath();
+            ctx.moveTo(player.x, player.y - player.size);
+            ctx.lineTo(player.x - player.size, player.y + player.size / 2);
+            ctx.lineTo(player.x + player.size, player.y + player.size / 2);
+            ctx.closePath();
+            ctx.fill();
+            ctx.shadowBlur = 0;
+
+            // Draw Obstacles
+            obstacles.forEach(o => {
+                ctx.save();
+                ctx.translate(o.x, o.y);
+                ctx.rotate(o.rot);
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = o.color;
+                ctx.strokeStyle = o.color;
+                ctx.lineWidth = 3;
+                ctx.strokeRect(-o.size/2, -o.size/2, o.size, o.size);
+                ctx.restore();
+            });
+
+            // Draw Collectibles
+            collectibles.forEach(c => {
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = c.color;
+                ctx.fillStyle = c.color;
+                ctx.beginPath();
+                ctx.arc(c.x, c.y, c.size, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            // Draw Particles
+            particles.forEach(p => {
+                ctx.fillStyle = p.color;
+                ctx.globalAlpha = p.life;
+                ctx.fillRect(p.x, p.y, 3, 3);
+            });
+            ctx.globalAlpha = 1;
+            ctx.shadowBlur = 0;
+        }
+
+        function loop() {
+            update();
+            draw();
+            requestAnimationFrame(loop);
+        }
+
+        window.onload = loop;
+    </script>
+</body>
+</html>
